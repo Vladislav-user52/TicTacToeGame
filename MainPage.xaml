@@ -1,0 +1,128 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="TicTacToeGame.MainPage"
+             Title="Бесконечные Крестики-Нолики">
+    
+    <ScrollView>
+        <VerticalStackLayout Spacing="10" Padding="10">
+            
+            <!-- Заголовок -->
+            <Label Text="Крестики-Нолики"
+                   FontSize="Title"
+                   HorizontalOptions="Center"
+                   TextColor="#1E88E5"/>
+            
+            <!-- Статус игры -->
+            <Frame BorderColor="LightGray" CornerRadius="10" Padding="10">
+                <VerticalStackLayout Spacing="5">
+                    <Label x:Name="StatusLabel" 
+                           Text="Ход: X" 
+                           FontSize="Subtitle"
+                           HorizontalOptions="Center"/>
+                    <Label x:Name="WinnerLabel" 
+                           Text="" 
+                           FontSize="Medium"
+                           HorizontalOptions="Center"
+                           TextColor="Red"
+                           IsVisible="False"/>
+                </VerticalStackLayout>
+            </Frame>
+            
+            <!-- Панель управления -->
+            <Frame BorderColor="LightGray" CornerRadius="10" Padding="10">
+                <Grid ColumnDefinitions="*,*,*,*" RowDefinitions="Auto,Auto" 
+                      ColumnSpacing="5" RowSpacing="5">
+                    
+                    <Button Grid.Column="0" Grid.Row="0" Text="Новая игра"
+                            Clicked="OnNewGameClicked" BackgroundColor="#A0AEC0"/>
+                    
+                    <Button Grid.Column="1" Grid.Row="0" Text="Отменить ход"
+                            Clicked="OnUndoClicked" BackgroundColor="#A0AEC0"/>
+                    
+                    <Button Grid.Column="2" Grid.Row="0" Text="Сменить игрока"
+                            Clicked="OnSwitchPlayerClicked" BackgroundColor="#A0AEC0"/>
+                    
+                    <Button Grid.Column="3" Grid.Row="0" Text="ИИ ходит"
+                            Clicked="OnAIMoveClicked" BackgroundColor="#A0AEC0"/>
+                    
+                    
+                    <Button Grid.Column="2" Grid.ColumnSpan="2" Grid.Row="1" 
+                            Text="Скрыть пустые"
+                            Clicked="OnToggleEmptyClicked" BackgroundColor="#A0AEC0"/>
+                     <Button Grid.Column="0" Grid.ColumnSpan="2" Grid.Row="1" 
+                            Text="Показать линии"
+                            Clicked="OnShowLinesInfoClicked" BackgroundColor="#A0AEC0"/>
+                    
+                    <Button Grid.Column="1" Grid.Row="1" Text="Статистика весов"
+                            Clicked="OnShowWeightStatsClicked" BackgroundColor="#A0AEC0"/>
+                </Grid>
+            </Frame>
+            
+            <!-- Панель управления размером поля -->
+            <Frame BorderColor="LightGray" CornerRadius="10" Padding="10">
+                <VerticalStackLayout Spacing="10">
+                    <HorizontalStackLayout Spacing="5" HorizontalOptions="Center">
+                        <Button x:Name="ToggleAutoExpandButton" 
+                                Text="Авторасширение: ВКЛ" 
+                                Clicked="OnToggleAutoExpandClicked"
+                                BackgroundColor="#A0AEC0"/>
+                        
+                        <Button x:Name="ExpandButton" 
+                                Text="+" 
+                                Clicked="OnExpandClicked" 
+                                WidthRequest="40"
+                                BackgroundColor="#A0AEC0"/>
+                        
+                        <Button x:Name="ShrinkButton" 
+                                Text="-" 
+                                Clicked="OnShrinkClicked" 
+                                WidthRequest="40"
+                                BackgroundColor="#A0AEC0"/>
+                        
+                        <Button x:Name="ResetSizeButton" 
+                                Text="Сброс" 
+                                Clicked="OnResetSizeClicked"
+                                BackgroundColor="#A0AEC0"/>
+                    </HorizontalStackLayout>
+                    
+                    <!-- Информационная панель -->
+                    <HorizontalStackLayout Spacing="10" HorizontalOptions="Center">
+                        <Label x:Name="RadiusLabel" Text="Радиус: 3" FontSize="14" FontAttributes="Bold"/>
+                        <Label x:Name="BorderInfoLabel" Text="Граница: ±3" FontSize="14"/>
+                        <Label x:Name="AutoExpandLabel" Text="Авторасширение включено" FontSize="14"/>
+                        <Label x:Name="WeightInfoLabel" Text="Вес: 0.0" />
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Frame>
+            
+            <!-- Информация -->
+            <Frame BorderColor="LightGray" CornerRadius="10" Padding="10">
+                <VerticalStackLayout Spacing="5">
+                    <HorizontalStackLayout Spacing="10">
+                        <Label Text="Занято клеток:" FontAttributes="Bold"/>
+                        <Label x:Name="OccupiedLabel" Text="0"/>
+                        <Label Text="Радиус поля:" FontAttributes="Bold"/>
+                        <Label x:Name="FieldRadiusLabel" Text="1"/>
+                        <Label Text="Ходов:" FontAttributes="Bold"/>
+                        <Label x:Name="MovesLabel" Text="0"/>
+                    </HorizontalStackLayout>
+                    <HorizontalStackLayout Spacing="10">
+                        <Label Text="Текущий игрок:" FontAttributes="Bold"/>
+                        <Label x:Name="CurrentPlayerLabel" Text="X"/>
+                    </HorizontalStackLayout>
+                </VerticalStackLayout>
+            </Frame>
+            
+            <!-- Игровое поле -->
+            <ScrollView Orientation="Both" 
+                        HorizontalScrollBarVisibility="Always"
+                        VerticalScrollBarVisibility="Always">
+                <AbsoluteLayout x:Name="GameBoardContainer"
+                                HeightRequest="600"
+                                WidthRequest="600"/>
+            </ScrollView>
+            
+        </VerticalStackLayout>
+    </ScrollView>
+</ContentPage>
