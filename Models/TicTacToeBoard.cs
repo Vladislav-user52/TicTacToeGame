@@ -8,9 +8,10 @@ namespace TicTacToeGame.Models
     public class TicTacToeBoard : IEquatable<TicTacToeBoard>
     {
         private readonly Dictionary<(int, int), Player> _board;
-        private readonly InfiniteFieldGenerator _fieldGenerator;
+        private InfiniteFieldGenerator _fieldGenerator;
         private readonly GameRules _gameRules;
-        private readonly Dictionary<Player, List<Line>> _playerLines;
+        
+        private readonly Dictionary<Player, Line> _bestPlayerLine;
         
         public Player CurrentPlayer { get; private set; }
         public int MoveCount => _board.Count;
@@ -23,12 +24,17 @@ namespace TicTacToeGame.Models
             public double TotalWeight { get; set; }
             public bool IsComplete => Cells.Count >= RequiredLength;
             public int RequiredLength { get; set; }
-            
-            public Line(Player player, int requiredLength)
+            public bool IsFullyBlocked { get; set; }
+            public bool IsActive { get; set; }
+            public int[] Direction { get; set; } 
+            public Line(Player player, int requiredLength, int[] direction = null)
             {
                 Player = player;
                 Cells = new List<(int x, int y)>();
                 RequiredLength = requiredLength;
+                IsFullyBlocked = false;
+                IsActive = true;
+                Direction = direction ?? new[] { 0, 0 };
             }
             
             public void AddCell(int x, int y, double weight)
@@ -41,22 +47,25 @@ namespace TicTacToeGame.Models
             
             public double CalculateScore()
             {
-                double score = TotalWeight;
-                
-                // Бонус за полную линию
-                if (IsComplete)
-                    score *= 2.0;
-                
-                // Бонус за центральные клетки
-                int centerCount = Cells.Count(c => Math.Abs(c.x) <= 1 && Math.Abs(c.y) <= 1);
-                score += centerCount * 5.0;
-                
-                return score;
+                if (!IsActive)
+                    return 0;
+                    
+                if (IsFullyBlocked)
+                    return 0;
+                    
+                return TotalWeight;
+            }
+            
+            public void Reset()
+            {
+                IsActive = false;
+                IsFullyBlocked = true;
             }
             
             public override string ToString()
             {
-                return $"{Player} Line: {Cells.Count}/{RequiredLength} cells, Score: {CalculateScore():F1}";
+                return $"{Player} Line: {Cells.Count}/{RequiredLength} cells, " +
+                       $"Weight: {TotalWeight:F1}, Blocked: {IsFullyBlocked}, Active: {IsActive}";
             }
         }
         
@@ -66,34 +75,38 @@ namespace TicTacToeGame.Models
             _fieldGenerator = new InfiniteFieldGenerator();
             _gameRules = gameRules ?? new GameRules();
             
-            
-            
-            
-            _playerLines = new Dictionary<Player, List<Line>>
+            _bestPlayerLine = new Dictionary<Player, Line>
             {
-                [Player.X] = new List<Line>(),
-                [Player.O] = new List<Line>()
+                [Player.X] = null,
+                [Player.O] = null
             };
-            CurrentPlayer = Player.X; 
+            CurrentPlayer = Player.X;
         }
         
-        private TicTacToeBoard(TicTacToeBoard other)
+        protected TicTacToeBoard(TicTacToeBoard other)
         {
             _board = new Dictionary<(int, int), Player>(other._board);
             _fieldGenerator = new InfiniteFieldGenerator(other._board.Keys);
             _gameRules = other._gameRules;
-            _playerLines = new Dictionary<Player, List<Line>>
+            
+            _bestPlayerLine = new Dictionary<Player, Line>
             {
-                [Player.X] = other._playerLines[Player.X].Select(l => new Line(l.Player, l.RequiredLength)
-                {
-                    Cells = new List<(int, int)>(l.Cells),
-                    TotalWeight = l.TotalWeight
-                }).ToList(),
-                [Player.O] = other._playerLines[Player.O].Select(l => new Line(l.Player, l.RequiredLength)
-                {
-                    Cells = new List<(int, int)>(l.Cells),
-                    TotalWeight = l.TotalWeight
-                }).ToList()
+                [Player.X] = other._bestPlayerLine[Player.X] != null ? 
+                    new Line(other._bestPlayerLine[Player.X].Player, other._bestPlayerLine[Player.X].RequiredLength, other._bestPlayerLine[Player.X].Direction)
+                    {
+                        Cells = new List<(int, int)>(other._bestPlayerLine[Player.X].Cells),
+                        TotalWeight = other._bestPlayerLine[Player.X].TotalWeight,
+                        IsFullyBlocked = other._bestPlayerLine[Player.X].IsFullyBlocked,
+                        IsActive = other._bestPlayerLine[Player.X].IsActive
+                    } : null,
+                [Player.O] = other._bestPlayerLine[Player.O] != null ?
+                    new Line(other._bestPlayerLine[Player.O].Player, other._bestPlayerLine[Player.O].RequiredLength, other._bestPlayerLine[Player.O].Direction)
+                    {
+                        Cells = new List<(int, int)>(other._bestPlayerLine[Player.O].Cells),
+                        TotalWeight = other._bestPlayerLine[Player.O].TotalWeight,
+                        IsFullyBlocked = other._bestPlayerLine[Player.O].IsFullyBlocked,
+                        IsActive = other._bestPlayerLine[Player.O].IsActive
+                    } : null
             };
             CurrentPlayer = other.CurrentPlayer;
         }
@@ -106,11 +119,11 @@ namespace TicTacToeGame.Models
             _board[(x, y)] = CurrentPlayer;
             _fieldGenerator.MarkPositionOccupied(x, y);
             
-            // Обновляем веса после хода
             UpdateWeightsAfterMove(x, y, CurrentPlayer);
+            UpdateBestLineForPlayer(x, y, CurrentPlayer);
             
-            // Обновляем линии игрока
-            UpdatePlayerLines(x, y, CurrentPlayer);
+            Player opponent = CurrentPlayer == Player.X ? Player.O : Player.X;
+            CheckAndResetBlockedLine(opponent);
             
             CurrentPlayer = CurrentPlayer == Player.X ? Player.O : Player.X;
             return true;
@@ -125,48 +138,606 @@ namespace TicTacToeGame.Models
         {
             if (_board.ContainsKey((x, y)))
             {
+                var player = _board[(x, y)];
                 _board.Remove((x, y));
                 _fieldGenerator.MarkPositionFree(x, y);
                 
-                // Уменьшаем вес клетки при отмене хода
                 _fieldGenerator.DecreaseCellWeight(x, y, 1.0);
                 
-                // Удаляем клетку из линий
-                RemoveCellFromLines(x, y);
+                var bestLine = _bestPlayerLine[player];
+                if (bestLine != null && bestLine.Contains(x, y))
+                {
+                    var cellToRemove = bestLine.Cells.FirstOrDefault(c => c.x == x && c.y == y);
+                    if (cellToRemove != default)
+                    {
+                        bestLine.Cells.Remove(cellToRemove);
+                        bestLine.TotalWeight -= _fieldGenerator.GetCellWeight(x, y);
+                        
+                        if (bestLine.Cells.Count < 2)
+                        {
+                            _bestPlayerLine[player] = null;
+                        }
+                        else
+                        {
+                        
+                            UpdateLineDirection(bestLine);
+                            bestLine.IsFullyBlocked = IsLineFullyBlocked(bestLine, player);
+                        }
+                    }
+                }
                 
                 CurrentPlayer = CurrentPlayer == Player.X ? Player.O : Player.X;
             }
         }
         
-        private void RemoveCellFromLines(int x, int y)
+        private void UpdateLineDirection(Line line)
         {
-            foreach (var player in new[] { Player.X, Player.O })
+            if (line.Cells.Count < 2)
             {
-                foreach (var line in _playerLines[player].ToList())
+                line.Direction = new[] { 0, 0 };
+                return;
+            }
+            
+            var firstCell = line.Cells.First();
+            var lastCell = line.Cells.Last();
+            
+            int dx = lastCell.x - firstCell.x;
+            int dy = lastCell.y - firstCell.y;
+            
+            
+            if (dx != 0) dx = Math.Sign(dx);
+            if (dy != 0) dy = Math.Sign(dy);
+            
+            line.Direction = new[] { dx, dy };
+        }
+        
+        private void UpdateBestLineForPlayer(int x, int y, Player player)
+        {
+            double cellWeight = _fieldGenerator.GetCellWeight(x, y);
+            int requiredLength = _gameRules.RequiredLineLength;
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            var currentBestLine = _bestPlayerLine[player];
+            
+            if (currentBestLine == null)
+            {
+                
+                var newLine = FindBestLineFromCell(x, y, player, requiredLength);
+                if (newLine != null)
                 {
-                    if (line.Contains(x, y))
+                    _bestPlayerLine[player] = newLine;
+                    newLine.IsFullyBlocked = IsLineFullyBlocked(newLine, player);
+                }
+                return;
+            }
+            
+            if (!currentBestLine.IsActive)
+            {
+                
+                var newLine = FindBestLineFromCell(x, y, player, requiredLength);
+                if (newLine != null)
+                {
+                    _bestPlayerLine[player] = newLine;
+                    newLine.IsFullyBlocked = IsLineFullyBlocked(newLine, player);
+                }
+                return;
+            }
+            
+            
+            bool canExtend = CanExtendLine(currentBestLine, x, y);
+            
+            if (canExtend)
+            {
+                
+                bool hasEnemyBetween = HasEnemyBetweenLineAndCell(currentBestLine, x, y, opponent);
+                
+                if (!hasEnemyBetween)
+                {
+                    currentBestLine.AddCell(x, y, cellWeight);
+                    
+                    
+                    UpdateLineDirection(currentBestLine);
+                    
+                    
+                    if (IsLineContinuous(currentBestLine))
                     {
-                        // Удаляем клетку из линии
-                        var cellToRemove = line.Cells.FirstOrDefault(c => c.x == x && c.y == y);
-                        if (cellToRemove != default)
+                        currentBestLine.IsFullyBlocked = IsLineFullyBlocked(currentBestLine, player);
+                    }
+                    else
+                    {
+                        
+                        var newLine = FindBestLineFromCell(x, y, player, requiredLength);
+                        if (newLine != null && newLine.TotalWeight > currentBestLine.TotalWeight)
                         {
-                            line.Cells.Remove(cellToRemove);
-                            line.TotalWeight -= _fieldGenerator.GetCellWeight(x, y);
-                            
-                            // Если линия стала пустой или слишком короткой, удаляем её
-                            if (line.Cells.Count < 2)
-                            {
-                                _playerLines[player].Remove(line);
-                            }
+                            _bestPlayerLine[player] = newLine;
+                            newLine.IsFullyBlocked = IsLineFullyBlocked(newLine, player);
                         }
+                    }
+                }
+                else
+                {
+                    
+                    var newLine = FindBestLineFromCell(x, y, player, requiredLength);
+                    if (newLine != null)
+                    {
+                        double currentScore = currentBestLine.CalculateScore();
+                        double potentialScore = newLine.CalculateScore();
+                        
+                        if (potentialScore > currentScore)
+                        {
+                            _bestPlayerLine[player] = newLine;
+                            newLine.IsFullyBlocked = IsLineFullyBlocked(newLine, player);
+                        }
+                    }
+                }
+            }
+            else
+            {
+                
+                var potentialLine = FindPotentialLineFromCell(x, y, player, requiredLength);
+                
+                if (potentialLine != null)
+                {
+                    double currentScore = currentBestLine.CalculateScore();
+                    double potentialScore = potentialLine.CalculateScore();
+                    
+                    if (potentialScore > currentScore)
+                    {
+                        _bestPlayerLine[player] = potentialLine;
+                        potentialLine.IsFullyBlocked = IsLineFullyBlocked(potentialLine, player);
                     }
                 }
             }
         }
         
+        private bool HasEnemyBetweenLineAndCell(Line line, int x, int y, Player opponent)
+        {
+            if (line.Cells.Count == 0)
+                return false;
+                
+            
+            var nearestCell = line.Cells
+                .OrderBy(c => Math.Abs(c.x - x) + Math.Abs(c.y - y))
+                .First();
+                
+            int dx = Math.Sign(x - nearestCell.x);
+            int dy = Math.Sign(y - nearestCell.y);
+            
+        
+            int checkX = nearestCell.x + dx;
+            int checkY = nearestCell.y + dy;
+            
+            while (checkX != x || checkY != y)
+            {
+                if (GetCell(checkX, checkY) == opponent)
+                    return true;
+                    
+                checkX += dx;
+                checkY += dy;
+            }
+            
+            return false;
+        }
+        
+        private void CheckAndResetBlockedLine(Player player)
+        {
+            var bestLine = _bestPlayerLine[player];
+            if (bestLine == null || !bestLine.IsActive)
+                return;
+                
+            bool isBlocked = IsLineFullyBlocked(bestLine, player);
+            
+            if (isBlocked && _gameRules.ResetScoreOnFullBlock)
+            {
+                bestLine.Reset();
+                TryFindNewBestLineFromExistingCells(player);
+            }
+        }
+        
+        private void TryFindNewBestLineFromExistingCells(Player player)
+        {
+            int requiredLength = _gameRules.RequiredLineLength;
+            
+            var playerCells = _board
+                .Where(kvp => kvp.Value == player)
+                .Select(kvp => (kvp.Key.Item1, kvp.Key.Item2))
+                .ToList();
+                
+            if (playerCells.Count == 0)
+                return;
+                
+            Line bestNewLine = null;
+            double bestScore = 0;
+            
+            foreach (var (startX, startY) in playerCells)
+            {
+                var line = FindBestLineFromCell(startX, startY, player, requiredLength);
+                if (line != null)
+                {
+                    double score = line.TotalWeight;
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestNewLine = line;
+                    }
+                }
+            }
+            
+            if (bestNewLine != null)
+            {
+                _bestPlayerLine[player] = bestNewLine;
+                bestNewLine.IsFullyBlocked = IsLineFullyBlocked(bestNewLine, player);
+                
+                if (bestNewLine.IsFullyBlocked && _gameRules.ResetScoreOnFullBlock)
+                {
+                    bestNewLine.Reset();
+                }
+            }
+        }
+        
+        private Line FindBestLineFromCell(int x, int y, Player player, int requiredLength)
+        {
+            double cellWeight = _fieldGenerator.GetCellWeight(x, y);
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            int[][] directions = new int[][]
+            {
+                new[] { 1, 0 },
+                new[] { 0, 1 },
+                new[] { 1, 1 },
+                new[] { 1, -1 }
+            };
+            
+            Line bestLine = null;
+            double bestScore = 0;
+            
+            foreach (var dir in directions)
+            {
+               
+                var line = CollectContinuousLine(x, y, dir[0], dir[1], player, opponent, requiredLength);
+                
+                if (line != null && line.Cells.Count >= 2)
+                {
+                    double score = line.TotalWeight;
+                    if (score > bestScore)
+                    {
+                        bestScore = score;
+                        bestLine = line;
+                    }
+                }
+            }
+            
+            return bestLine;
+        }
+        
+        private Line CollectContinuousLine(int startX, int startY, int dx, int dy, Player player, Player opponent, int requiredLength)
+        {
+            var line = new Line(player, requiredLength, new[] { dx, dy });
+            
+           
+            for (int i = 0; i < requiredLength; i++)
+            {
+                int checkX = startX + i * dx;
+                int checkY = startY + i * dy;
+                var cellPlayer = GetCell(checkX, checkY);
+                
+                if (cellPlayer == player)
+                {
+                    line.AddCell(checkX, checkY, _fieldGenerator.GetCellWeight(checkX, checkY));
+                }
+                else if (cellPlayer == opponent || cellPlayer == Player.None)
+                {
+                    
+                    break;
+                }
+            }
+            
+            
+            for (int i = 1; i < requiredLength; i++)
+            {
+                int checkX = startX - i * dx;
+                int checkY = startY - i * dy;
+                var cellPlayer = GetCell(checkX, checkY);
+                
+                if (cellPlayer == player)
+                {
+                    line.AddCell(checkX, checkY, _fieldGenerator.GetCellWeight(checkX, checkY));
+                }
+                else if (cellPlayer == opponent || cellPlayer == Player.None)
+                {
+                    
+                    break;
+                }
+            }
+            
+           
+            if (line.Cells.Count >= 2)
+            {
+                line.Cells = OrderCellsByDirection(line.Cells, dx, dy);
+                
+                
+                if (!IsLineContinuous(line))
+                {
+                    return null;
+                }
+            }
+            
+            return line.Cells.Count >= 2 ? line : null;
+        }
+        
+        private List<(int x, int y)> OrderCellsByDirection(List<(int x, int y)> cells, int dx, int dy)
+        {
+            if (dx != 0 && dy == 0) 
+                return cells.OrderBy(c => c.x).ToList();
+            else if (dx == 0 && dy != 0) 
+                return cells.OrderBy(c => c.y).ToList();
+            else if (dx != 0 && dy != 0) 
+            {
+                if (dx == dy) 
+                    return cells.OrderBy(c => c.x).ThenBy(c => c.y).ToList();
+                else 
+                    return cells.OrderBy(c => c.x).ThenByDescending(c => c.y).ToList();
+            }
+            
+            return cells;
+        }
+        
+        private bool IsLineContinuous(Line line)
+        {
+            if (line.Cells.Count < 2)
+                return true;
+                
+            var sortedCells = line.Cells;
+            int dx = line.Direction[0];
+            int dy = line.Direction[1];
+            
+            
+            for (int i = 1; i < sortedCells.Count; i++)
+            {
+                var prev = sortedCells[i - 1];
+                var curr = sortedCells[i];
+                
+                
+                if (Math.Abs(curr.x - prev.x) != Math.Abs(dx) || 
+                    Math.Abs(curr.y - prev.y) != Math.Abs(dy))
+                {
+                    return false;
+                }
+                
+                
+                if (dx != 0 && Math.Sign(curr.x - prev.x) != dx)
+                    return false;
+                if (dy != 0 && Math.Sign(curr.y - prev.y) != dy)
+                    return false;
+            }
+            
+            return true;
+        }
+        
+        private Line FindPotentialLineFromCell(int x, int y, Player player, int requiredLength)
+        {
+            double cellWeight = _fieldGenerator.GetCellWeight(x, y);
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            int[][] directions = new int[][]
+            {
+                new[] { 1, 0 },
+                new[] { 0, 1 },
+                new[] { 1, 1 },
+                new[] { 1, -1 }
+            };
+            
+            Line bestLine = null;
+            double bestScore = 0;
+            
+            foreach (var dir in directions)
+            {
+                
+                var line = new Line(player, requiredLength, new[] { dir[0], dir[1] });
+                line.AddCell(x, y, cellWeight);
+                
+                
+                for (int i = 1; i < requiredLength; i++)
+                {
+                    int nx = x + i * dir[0];
+                    int ny = y + i * dir[1];
+                    var cellPlayer = GetCell(nx, ny);
+                    
+                    if (cellPlayer == player)
+                    {
+                        line.AddCell(nx, ny, _fieldGenerator.GetCellWeight(nx, ny));
+                    }
+                    else if (cellPlayer == opponent)
+                    {
+                        break; 
+                    }
+                    
+                }
+                
+                
+                for (int i = 1; i < requiredLength; i++)
+                {
+                    int nx = x - i * dir[0];
+                    int ny = y - i * dir[1];
+                    var cellPlayer = GetCell(nx, ny);
+                    
+                    if (cellPlayer == player)
+                    {
+                        line.AddCell(nx, ny, _fieldGenerator.GetCellWeight(nx, ny));
+                    }
+                    else if (cellPlayer == opponent)
+                    {
+                        break; 
+                    }
+                }
+                
+                if (line.Cells.Count >= 2)
+                {
+                    
+                    if (IsPotentialLineContinuous(line))
+                    {
+                        double score = line.CalculateScore();
+                        if (score > bestScore)
+                        {
+                            bestScore = score;
+                            bestLine = line;
+                        }
+                    }
+                }
+            }
+            
+            return bestLine;
+        }
+        
+        private bool IsPotentialLineContinuous(Line line)
+        {
+            if (line.Cells.Count < 2)
+                return true;
+                
+            var sortedCells = OrderCellsByDirection(line.Cells, line.Direction[0], line.Direction[1]);
+            int dx = line.Direction[0];
+            int dy = line.Direction[1];
+            
+            
+            for (int i = 1; i < sortedCells.Count; i++)
+            {
+                var prev = sortedCells[i - 1];
+                var curr = sortedCells[i];
+                
+                
+                int steps = Math.Max(Math.Abs(curr.x - prev.x), Math.Abs(curr.y - prev.y));
+                
+                for (int step = 1; step < steps; step++)
+                {
+                    int checkX = prev.x + step * Math.Sign(curr.x - prev.x);
+                    int checkY = prev.y + step * Math.Sign(curr.y - prev.y);
+                    
+                    Player opponent = line.Player == Player.X ? Player.O : Player.X;
+                    if (GetCell(checkX, checkY) == opponent)
+                    {
+                        return false; 
+                    }
+                }
+            }
+            
+            return true;
+        }
+        
+        private bool CanExtendLine(Line line, int x, int y)
+        {
+            if (line.Cells.Count == 0)
+                return false;
+                
+            if (line.Contains(x, y))
+                return true;
+                
+            
+            var sortedCells = OrderCellsByDirection(line.Cells, line.Direction[0], line.Direction[1]);
+            var firstCell = sortedCells.First();
+            var lastCell = sortedCells.Last();
+            
+            int dx = line.Direction[0];
+            int dy = line.Direction[1];
+            
+            
+            int frontX = lastCell.x + dx;
+            int frontY = lastCell.y + dy;
+            int backX = firstCell.x - dx;
+            int backY = firstCell.y - dy;
+            
+            return (x == frontX && y == frontY) || (x == backX && y == backY);
+        }
+        
         public Player GetCell(int x, int y)
         {
             return _board.ContainsKey((x, y)) ? _board[(x, y)] : Player.None;
+        }
+        
+        private bool IsLineFullyBlocked(Line line, Player player)
+        {
+            if (!_gameRules.ResetScoreOnFullBlock || line.Cells.Count < 2)
+                return false;
+            
+            if (!line.IsActive)
+                return true;
+            
+            var sortedCells = OrderCellsByDirection(line.Cells, line.Direction[0], line.Direction[1]);
+            var firstCell = sortedCells.First();
+            var lastCell = sortedCells.Last();
+            
+            int dx = line.Direction[0];
+            int dy = line.Direction[1];
+            
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            bool frontBlocked = IsDirectionBlockedCorrectly(lastCell.x, lastCell.y, dx, dy, player, opponent);
+            bool backBlocked = IsDirectionBlockedCorrectly(firstCell.x, firstCell.y, -dx, -dy, player, opponent);
+            
+            return frontBlocked && backBlocked;
+        }
+        
+        private bool IsDirectionBlockedCorrectly(int startX, int startY, int dx, int dy, Player player, Player opponent)
+        {
+            for (int i = 1; i <= 2; i++)
+            {
+                int checkX = startX + i * dx;
+                int checkY = startY + i * dy;
+                var cell = GetCell(checkX, checkY);
+                
+                if (cell == Player.None)
+                {
+                    return false;
+                }
+                else if (cell == opponent)
+                {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        private bool IsScatteredLineBlocked(Line line, Player player)
+        {
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            foreach (var (x, y) in line.Cells)
+            {
+                int[][] directions = new int[][]
+                {
+                    new[] { 1, 0 },
+                    new[] { 0, 1 },
+                    new[] { 1, 1 },
+                    new[] { 1, -1 }
+                };
+                
+                foreach (var dir in directions)
+                {
+                    bool canExtend = false;
+                    
+                    for (int i = -3; i <= 3; i++)
+                    {
+                        if (i == 0) continue;
+                        
+                        int checkX = x + i * dir[0];
+                        int checkY = y + i * dir[1];
+                        var cell = GetCell(checkX, checkY);
+                        
+                        if (cell == Player.None)
+                        {
+                            canExtend = true;
+                            break;
+                        }
+                    }
+                    
+                    if (canExtend)
+                    {
+                        return false;
+                    }
+                }
+            }
+            
+            return true;
         }
         
         public IEnumerable<TicTacToeMove> GetPossibleMoves()
@@ -196,223 +767,12 @@ namespace TicTacToeGame.Models
         {
             double priority = 0;
             
-            // 1. Вес клетки (самый важный фактор)
             double cellWeight = _fieldGenerator.GetCellWeight(move.X, move.Y);
             priority += cellWeight * 20;
-            
-            // 2. Расстояние от центра
-            double distanceFromCenter = Math.Sqrt(move.X * move.X + move.Y * move.Y);
-            priority += 15.0 / (1.0 + distanceFromCenter);
-            
-            // 3. Соседние фигуры
-            (int friendly, int opponent) adjacentCounts = CountAdjacentPieces(move.X, move.Y);
-            priority += adjacentCounts.friendly * 8;  // Свои фигуры рядом - хорошо
-            priority -= adjacentCounts.opponent * 4; // Фигуры противника рядом - осторожно
-            
-            // 4. Потенциал линий (новая логика)
-            priority += EvaluateLinePotentialForNewRules(move.X, move.Y, CurrentPlayer) * 3;
-            
-            // 5. Стратегические позиции
-            priority += EvaluateStrategicPosition(move.X, move.Y);
-            
-            // 6. Блокирующие ходы
-            priority += EvaluateBlockingPotential(move.X, move.Y, CurrentPlayer);
             
             return priority;
         }
         
-        private double EvaluateLinePotentialForNewRules(int x, int y, Player player)
-        {
-            double potential = 0;
-            int requiredLength = _gameRules.RequiredLineLength;
-            
-            int[][] directions = new int[][]
-            {
-                new[] { 1, 0 },
-                new[] { 0, 1 },
-                new[] { 1, 1 },
-                new[] { 1, -1 }
-            };
-            
-            foreach (var dir in directions)
-            {
-                int playerCount = 1; // Сама клетка
-                int emptyCount = 0;
-                
-                // Проверяем в обе стороны
-                for (int i = 1; i < requiredLength; i++)
-                {
-                    // Вперед
-                    var cellForward = GetCell(x + i * dir[0], y + i * dir[1]);
-                    if (cellForward == player) 
-                        playerCount++;
-                    else if (cellForward == Player.None) 
-                        emptyCount++;
-                    
-                    // Назад
-                    var cellBackward = GetCell(x - i * dir[0], y - i * dir[1]);
-                    if (cellBackward == player) 
-                        playerCount++;
-                    else if (cellBackward == Player.None) 
-                        emptyCount++;
-                }
-                
-                // Оценка потенциала линии
-                if (playerCount >= requiredLength) 
-                    potential += 100;
-                else if (playerCount == requiredLength - 1 && emptyCount > 0) 
-                    potential += 60;
-                else if (playerCount == requiredLength - 2 && emptyCount >= 2) 
-                    potential += 35;
-                else if (playerCount == requiredLength - 3 && emptyCount >= 3) 
-                    potential += 20;
-                else if (playerCount >= 2) 
-                    potential += 10;
-            }
-            
-            return potential;
-        }
-        
-        private (int friendly, int opponent) CountAdjacentPieces(int x, int y)
-        {
-            int friendlyCount = 0;
-            int opponentCount = 0;
-            
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    if (dx == 0 && dy == 0) continue;
-                    
-                    var neighbor = GetCell(x + dx, y + dy);
-                    if (neighbor == CurrentPlayer)
-                        friendlyCount++;
-                    else if (neighbor != Player.None)
-                        opponentCount++;
-                }
-            }
-            return (friendlyCount, opponentCount);
-        }
-        
-        private double EvaluateLinePotential(int x, int y, Player player)
-        {
-            double potential = 0;
-            
-            int[][] directions = new int[][]
-            {
-                new[] { 1, 0 },
-                new[] { 0, 1 },
-                new[] { 1, 1 },
-                new[] { 1, -1 }
-            };
-            
-            foreach (var dir in directions)
-            {
-                potential += EvaluateDirectionPotential(x, y, dir[0], dir[1], player);
-            }
-            
-            return potential;
-        }
-        
-        private double EvaluateDirectionPotential(int x, int y, int dx, int dy, Player player)
-        {
-            int playerCount = 1; // Сама клетка
-            int emptyCount = 0;
-            Player opponent = player == Player.X ? Player.O : Player.X;
-            
-            // Проверяем в обе стороны
-            for (int i = 1; i < 5; i++)
-            {
-                // Вперед
-                var cellForward = GetCell(x + i * dx, y + i * dy);
-                if (cellForward == player) 
-                    playerCount++;
-                else if (cellForward == Player.None) 
-                    emptyCount++;
-                
-                // Назад
-                var cellBackward = GetCell(x - i * dx, y - i * dy);
-                if (cellBackward == player) 
-                    playerCount++;
-                else if (cellBackward == Player.None) 
-                    emptyCount++;
-            }
-            
-            // Оценка потенциала линии
-            if (playerCount >= 5) return 100;
-            if (playerCount == 4 && emptyCount > 0) return 50;
-            if (playerCount == 3 && emptyCount >= 2) return 30;
-            if (playerCount == 2 && emptyCount >= 3) return 15;
-            
-            return 0;
-        }
-        
-        private double EvaluateStrategicPosition(int x, int y)
-        {
-            double strategicValue = 0;
-            
-            // Центр доски имеет высшую стратегическую ценность
-            if (x == 0 && y == 0) 
-                strategicValue += 25;
-            
-            // Углы также важны
-            bool isCorner = (x == -3 || x == 3) && (y == -3 || y == 3);
-            if (isCorner) 
-                strategicValue += 15;
-            
-            // Клетки рядом с центром
-            bool nearCenter = Math.Abs(x) <= 1 && Math.Abs(y) <= 1;
-            if (nearCenter) 
-                strategicValue += 10;
-            
-            return strategicValue;
-        }
-        
-        private double EvaluateBlockingPotential(int x, int y, Player player)
-        {
-            Player opponent = player == Player.X ? Player.O : Player.X;
-            double blockingValue = 0;
-            int requiredLength = _gameRules.RequiredLineLength;
-            
-            int[][] directions = new int[][]
-            {
-                new[] { 1, 0 },
-                new[] { 0, 1 },
-                new[] { 1, 1 },
-                new[] { 1, -1 }
-            };
-            
-            foreach (var dir in directions)
-            {
-                // Проверяем, блокирует ли этот ход потенциальную линию противника
-                int opponentCount = 0;
-                int emptyCount = 0;
-                
-                for (int i = -(requiredLength - 1); i <= (requiredLength - 1); i++)
-                {
-                    if (i == 0) continue; // Пропускаем саму клетку
-                    
-                    int checkX = x + i * dir[0];
-                    int checkY = y + i * dir[1];
-                    var cell = GetCell(checkX, checkY);
-                    
-                    if (cell == opponent) 
-                        opponentCount++;
-                    else if (cell == Player.None) 
-                        emptyCount++;
-                }
-                
-                // Если противник имеет почти полную линию, блокирующий ход ценен
-                if (opponentCount >= requiredLength - 1 && emptyCount > 0)
-                    blockingValue += 40;
-                else if (opponentCount >= requiredLength - 2 && emptyCount >= 2)
-                    blockingValue += 20;
-            }
-            
-            return blockingValue;
-        }
-        
-        // Новый метод для получения взвешенных ходов
         public IEnumerable<(TicTacToeMove move, double weight)> GetWeightedPossibleMoves()
         {
             var possibleMoves = GetPossibleMoves();
@@ -420,248 +780,17 @@ namespace TicTacToeGame.Models
             foreach (var move in possibleMoves)
             {
                 double baseWeight = _fieldGenerator.GetCellWeight(move.X, move.Y);
-                
-                // Учитываем дополнительные факторы
-                double strategicWeight = EvaluateStrategicPosition(move.X, move.Y) / 10.0;
-                double lineWeight = EvaluateLinePotentialForNewRules(move.X, move.Y, CurrentPlayer) / 100.0;
-                double blockWeight = EvaluateBlockingPotential(move.X, move.Y, CurrentPlayer) / 40.0;
-                
-                double totalWeight = baseWeight * (1.0 + strategicWeight + lineWeight + blockWeight);
-                
-                yield return (move, totalWeight);
+                yield return (move, baseWeight);
             }
         }
         
-        // Метод для обновления весов после хода
         public void UpdateWeightsAfterMove(int x, int y, Player player)
         {
-            // Увеличиваем вес сделанного хода
             _fieldGenerator.IncreaseCellWeight(x, y, 3.0);
-            
-            // Обновляем веса вокруг сделанного хода
-            var adjacentPositions = new List<(int, int)>();
-            for (int dx = -1; dx <= 1; dx++)
-            {
-                for (int dy = -1; dy <= 1; dy++)
-                {
-                    if (dx == 0 && dy == 0) continue;
-                    adjacentPositions.Add((x + dx, y + dy));
-                }
-            }
-            
-            // Увеличиваем вес соседних клеток
-            foreach (var (adjX, adjY) in adjacentPositions)
-            {
-                if (!_fieldGenerator.IsPositionOccupied(adjX, adjY))
-                {
-                    _fieldGenerator.IncreaseCellWeight(adjX, adjY, 1.5);
-                }
-            }
-            
-            // Уменьшаем вес клеток, которые стали менее привлекательными
-            UpdateStrategicWeights(player);
         }
         
-        private void UpdateStrategicWeights(Player lastPlayer)
-        {
-            // Находим все потенциально опасные линии
-            var dangerousLines = FindDangerousLines(lastPlayer);
-            
-            foreach (var line in dangerousLines)
-            {
-                // Увеличиваем вес клеток, которые могут заблокировать опасную линию
-                foreach (var (x, y) in line.blockingCells)
-                {
-                    if (!_fieldGenerator.IsPositionOccupied(x, y))
-                    {
-                        _fieldGenerator.IncreaseCellWeight(x, y, 2.0);
-                    }
-                }
-            }
-        }
-        
-        private IEnumerable<(List<(int, int)> dangerousCells, List<(int, int)> blockingCells)> FindDangerousLines(Player player)
-        {
-            var result = new List<(List<(int, int)>, List<(int, int)>)>();
-            int requiredLength = _gameRules.RequiredLineLength;
-            
-            // Проверяем все направления от каждой занятой клетки
-            foreach (var ((x, y), cellPlayer) in _board)
-            {
-                if (cellPlayer != player) continue;
-                
-                int[][] directions = new int[][]
-                {
-                    new[] { 1, 0 },
-                    new[] { 0, 1 },
-                    new[] { 1, 1 },
-                    new[] { 1, -1 }
-                };
-                
-                foreach (var dir in directions)
-                {
-                    var dangerousCells = new List<(int, int)>();
-                    var blockingCells = new List<(int, int)>();
-                    
-                    // Проверяем линию
-                    for (int i = -(requiredLength - 1); i <= (requiredLength - 1); i++)
-                    {
-                        int checkX = x + i * dir[0];
-                        int checkY = y + i * dir[1];
-                        var cell = GetCell(checkX, checkY);
-                        
-                        if (cell == player)
-                        {
-                            dangerousCells.Add((checkX, checkY));
-                        }
-                        else if (cell == Player.None)
-                        {
-                            blockingCells.Add((checkX, checkY));
-                        }
-                    }
-                    
-                    if (dangerousCells.Count >= requiredLength - 1 && blockingCells.Count > 0)
-                    {
-                        result.Add((dangerousCells, blockingCells));
-                    }
-                }
-            }
-            
-            return result;
-        }
-        
-        // Новый метод для обновления линий игрока
-        private void UpdatePlayerLines(int x, int y, Player player)
-        {
-            double cellWeight = _fieldGenerator.GetCellWeight(x, y);
-            int requiredLength = _gameRules.RequiredLineLength;
-            
-            int[][] directions = new int[][]
-            {
-                new[] { 1, 0 },   // горизонталь
-                new[] { 0, 1 },   // вертикаль
-                new[] { 1, 1 },   // диагональ \
-                new[] { 1, -1 }   // диагональ /
-            };
-            
-            foreach (var dir in directions)
-            {
-                // Проверяем, можно ли добавить клетку к существующей линии
-                var lineToExtend = FindLineToExtend(x, y, dir[0], dir[1], player);
-                
-                if (lineToExtend != null)
-                {
-                    lineToExtend.AddCell(x, y, cellWeight);
-                }
-                else
-                {
-                    // Создаем новую потенциальную линию
-                    var newLine = new Line(player, requiredLength);
-                    newLine.AddCell(x, y, cellWeight);
-                    
-                    // Проверяем соседние клетки в обоих направлениях
-                    int count = 1;
-                    
-                    // Вперед
-                    for (int i = 1; i < requiredLength; i++)
-                    {
-                        int nx = x + i * dir[0];
-                        int ny = y + i * dir[1];
-                        if (GetCell(nx, ny) == player)
-                        {
-                            newLine.AddCell(nx, ny, _fieldGenerator.GetCellWeight(nx, ny));
-                            count++;
-                        }
-                        else break;
-                    }
-                    
-                    // Назад
-                    for (int i = 1; i < requiredLength; i++)
-                    {
-                        int nx = x - i * dir[0];
-                        int ny = y - i * dir[1];
-                        if (GetCell(nx, ny) == player)
-                        {
-                            newLine.AddCell(nx, ny, _fieldGenerator.GetCellWeight(nx, ny));
-                            count++;
-                        }
-                        else break;
-                    }
-                    
-                    // Сохраняем линию если в ней есть хотя бы 2 клетки
-                    if (count >= 2)
-                    {
-                        _playerLines[player].Add(newLine);
-                    }
-                }
-            }
-            
-            // Объединяем пересекающиеся линии
-            MergeIntersectingLines(player);
-        }
-        
-        private Line FindLineToExtend(int x, int y, int dx, int dy, Player player)
-        {
-            int requiredLength = _gameRules.RequiredLineLength;
-            
-            foreach (var line in _playerLines[player])
-            {
-                // Проверяем, находится ли клетка рядом с концом линии
-                foreach (var (cx, cy) in line.Cells)
-                {
-                    int distanceX = Math.Abs(cx - x);
-                    int distanceY = Math.Abs(cy - y);
-                    
-                    // Проверяем, лежит ли клетка на той же линии (в том же направлении)
-                    if ((dx != 0 && distanceY == 0 && Math.Abs(cx - x) <= requiredLength) ||
-                        (dy != 0 && distanceX == 0 && Math.Abs(cy - y) <= requiredLength) ||
-                        (dx != 0 && dy != 0 && Math.Abs(cx - x) == Math.Abs(cy - y) && 
-                         Math.Abs(cx - x) <= requiredLength))
-                    {
-                        return line;
-                    }
-                }
-            }
-            
-            return null;
-        }
-        
-        private void MergeIntersectingLines(Player player)
-        {
-            var lines = _playerLines[player];
-            bool merged;
-            
-            do
-            {
-                merged = false;
-                for (int i = 0; i < lines.Count; i++)
-                {
-                    for (int j = i + 1; j < lines.Count; j++)
-                    {
-                        if (lines[i].Cells.Any(cell => lines[j].Contains(cell.x, cell.y)))
-                        {
-                            // Объединяем линии
-                            foreach (var cell in lines[j].Cells)
-                            {
-                                if (!lines[i].Contains(cell.x, cell.y))
-                                {
-                                    lines[i].AddCell(cell.x, cell.y, 
-                                        _fieldGenerator.GetCellWeight(cell.x, cell.y));
-                                }
-                            }
-                            lines.RemoveAt(j);
-                            merged = true;
-                            break;
-                        }
-                    }
-                    if (merged) break;
-                }
-            } while (merged);
-        }
-        // есть ли у игрока 5 клеток ПОДРЯД
         private bool HasConsecutiveLine(Player player, int requiredLength)
         {
-            
             int searchRadius = Math.Max(10, requiredLength + 5);
             
             for (int x = -searchRadius; x <= searchRadius; x++)
@@ -670,11 +799,10 @@ namespace TicTacToeGame.Models
                 {
                     if (GetCell(x, y) == player)
                     {
-                        // Проверяем 4 направления от этой клетки
-                        if (CheckConsecutiveInDirection(x, y, 1, 0, player, requiredLength) ||   // →
-                            CheckConsecutiveInDirection(x, y, 0, 1, player, requiredLength) ||   // ↑
-                            CheckConsecutiveInDirection(x, y, 1, 1, player, requiredLength) ||   // ↗
-                            CheckConsecutiveInDirection(x, y, 1, -1, player, requiredLength))    // ↘
+                        if (CheckConsecutiveInDirection(x, y, 1, 0, player, requiredLength) ||
+                            CheckConsecutiveInDirection(x, y, 0, 1, player, requiredLength) ||
+                            CheckConsecutiveInDirection(x, y, 1, 1, player, requiredLength) ||
+                            CheckConsecutiveInDirection(x, y, 1, -1, player, requiredLength))
                         {
                             return true;
                         }
@@ -685,10 +813,8 @@ namespace TicTacToeGame.Models
             return false;
         }
 
-        // Проверяет, есть ли requiredLength клеток подряд в заданном направлении
         private bool CheckConsecutiveInDirection(int startX, int startY, int dx, int dy, Player player, int requiredLength)
         {
-            // Проверяем, есть ли requiredLength клеток подряд
             for (int i = 0; i < requiredLength; i++)
             {
                 if (GetCell(startX + i * dx, startY + i * dy) != player)
@@ -696,19 +822,16 @@ namespace TicTacToeGame.Models
             }
             return true;
         }
-        // Исправленный метод проверки победителя
+        
         public GameResult CheckWinner()
         {
             int requiredLength = _gameRules.RequiredLineLength;
             
-            // 1. Проверяем, есть ли у кого-то 5 клеток ПОДРЯД
-            bool xHasLine5 = HasConsecutiveLine(Player.X, requiredLength);
-            bool oHasLine5 = HasConsecutiveLine(Player.O, requiredLength);
+            bool xHasLine = HasConsecutiveLine(Player.X, requiredLength);
+            bool oHasLine = HasConsecutiveLine(Player.O, requiredLength);
             
-            // Если никто не собрал 5 клеток подряд - игра продолжается
-            if (!xHasLine5 && !oHasLine5)
+            if (!xHasLine && !oHasLine)
             {
-                // Проверка на ничью (нет свободных клеток после 50 ходов)
                 if (MoveCount >= 50 && !_fieldGenerator.GenerateFreePositions(1).Any())
                 {
                     return GameResult.Draw;
@@ -716,131 +839,239 @@ namespace TicTacToeGame.Models
                 return GameResult.None;
             }
             
-            // 2. Если кто-то собрал 5 клеток - игра заканчивается
-            // 3. Подсчитываем очки для определения победителя
-            double xTotalScore = CalculatePlayerScore(Player.X);
-            double oTotalScore = CalculatePlayerScore(Player.O);
+            double xScore = CalculatePlayerScore(Player.X);
+            double oScore = CalculatePlayerScore(Player.O);
             
-            // Определяем победителя по очкам
-            if (xTotalScore > oTotalScore)
+            if (xScore > oScore)
                 return GameResult.XWins;
-            else if (oTotalScore > xTotalScore)
+            else if (oScore > xScore)
                 return GameResult.OWins;
             else
                 return GameResult.Draw;
         }
         
-        // Подсчет очков игрока (сумма весов всех его линий)
         public double CalculatePlayerScore(Player player)
         {
-            double totalScore = 0;
+            var bestLine = _bestPlayerLine[player];
             
-            // Суммируем вес ВСЕХ линий игрока (не только полных)
-            foreach (var line in _playerLines[player])
-            {
-                // Базовый вес клеток в линии
-                double lineScore = line.TotalWeight;
+            if (bestLine == null)
+                return 0;
                 
-                // Бонус за длину линии (чем длиннее - тем лучше)
-                double lengthBonus = line.Cells.Count * 0.5;
-                lineScore += lengthBonus;
+            if (!bestLine.IsActive || bestLine.IsFullyBlocked)
+                return 0;
                 
-                // Бонус за полную линию
-                if (line.IsComplete)
-                    lineScore *= 2.0; // Удваиваем ценность полной линии
-                
-                // Бонус за центральные клетки
-                int centerCount = line.Cells.Count(c => Math.Abs(c.x) <= 1 && Math.Abs(c.y) <= 1);
-                lineScore += centerCount * 1.0;
-                
-                totalScore += lineScore;
-            }
-            
-            // Дополнительный бонус за стратегические позиции
-            totalScore += GetStrategicBonus(player);
-            
-            return totalScore;
+            return bestLine.TotalWeight;
         }
         
-        // Стратегический бонус
-        private double GetStrategicBonus(Player player)
-        {
-            double bonus = 0;
-            
-            // Бонус за контроль центра
-            for (int x = -1; x <= 1; x++)
-            {
-                for (int y = -1; y <= 1; y++)
-                {
-                    if (GetCell(x, y) == player)
-                        bonus += 2.0;
-                }
-            }
-            
-            // Бонус за пересечение линий
-            int intersectionCount = CountLineIntersections(player);
-            bonus += intersectionCount * 3.0;
-            
-            return bonus;
-        }
-        
-        // Получение лучшей линии игрока (для ИИ)
         public Line GetBestLine(Player player)
         {
-            return _playerLines[player]
-                .OrderByDescending(l => {
-                    double score = l.TotalWeight;
-                    if (l.IsComplete) score *= 1.5;
-                    score += l.Cells.Count * 0.3;
-                    return score;
-                })
-                .FirstOrDefault();
+            return _bestPlayerLine[player];
         }
         
-        // Проверка, близок ли игрок к завершению линии
         public bool IsPlayerCloseToWin(Player player, out Line closestLine)
         {
-            closestLine = null;
-            int requiredLength = _gameRules.RequiredLineLength;
+            closestLine = _bestPlayerLine[player];
             
-            foreach (var line in _playerLines[player])
-            {
-                int cellsNeeded = requiredLength - line.Cells.Count;
-                if (cellsNeeded <= 2 && cellsNeeded > 0)
-                {
-                    if (closestLine == null || cellsNeeded < (requiredLength - closestLine.Cells.Count))
-                    {
-                        closestLine = line;
-                    }
-                }
-            }
-            
-            return closestLine != null;
+            if (closestLine == null || !closestLine.IsActive || closestLine.IsFullyBlocked)
+                return false;
+                
+            int cellsNeeded = _gameRules.RequiredLineLength - closestLine.Cells.Count;
+            return cellsNeeded <= 2 && cellsNeeded > 0;
         }
         
-        private int CountLineIntersections(Player player)
-        {
-            int intersections = 0;
-            var lines = _playerLines[player];
-            
-            for (int i = 0; i < lines.Count; i++)
-            {
-                for (int j = i + 1; j < lines.Count; j++)
-                {
-                    if (lines[i].Cells.Any(cell => lines[j].Contains(cell.x, cell.y)))
-                    {
-                        intersections++;
-                    }
-                }
-            }
-            
-            return intersections;
-        }
-        
-        // Получить все линии игрока
         public IEnumerable<Line> GetPlayerLines(Player player)
         {
-            return _playerLines[player];
+            var line = _bestPlayerLine[player];
+            if (line != null)
+            {
+                yield return line;
+            }
+        }
+        
+        public List<Line> GetAllPlayerLines(Player player, int minLength = 3)
+        {
+            var lines = new List<Line>();
+            
+            var playerCells = _board
+                .Where(kvp => kvp.Value == player)
+                .Select(kvp => kvp.Key)
+                .ToList();
+            
+            if (playerCells.Count < minLength)
+                return lines;
+            
+            int[][] directions = new int[][]
+            {
+                new[] { 1, 0 },
+                new[] { 0, 1 },
+                new[] { 1, 1 },
+                new[] { 1, -1 }
+            };
+            
+            var lineHashes = new HashSet<string>();
+            
+            foreach (var (x, y) in playerCells)
+            {
+                foreach (var dir in directions)
+                {
+                    var line = CheckLineInDirection(x, y, dir[0], dir[1], player);
+                    
+                    if (line != null && line.Cells.Count >= minLength)
+                    {
+                        var sortedCells = line.Cells.OrderBy(c => c.x).ThenBy(c => c.y).ToList();
+                        var lineHash = string.Join(";", sortedCells.Select(c => $"{c.x},{c.y}"));
+                        
+                        if (!lineHashes.Contains(lineHash))
+                        {
+                            lines.Add(line);
+                            lineHashes.Add(lineHash);
+                        }
+                    }
+                }
+            }
+            
+            return lines;
+        }
+        
+        private Line CheckLineInDirection(int startX, int startY, int dx, int dy, Player player)
+        {
+            var line = new Line(player, _gameRules.RequiredLineLength, new[] { dx, dy });
+            Player opponent = player == Player.X ? Player.O : Player.X;
+            
+            
+            int backwardCount = 0;
+            for (int i = 1; i <= 10; i++)
+            {
+                int checkX = startX - i * dx;
+                int checkY = startY - i * dy;
+                var cell = GetCell(checkX, checkY);
+                
+                if (cell == player)
+                {
+                    backwardCount++;
+                }
+                else if (cell == opponent || cell == Player.None)
+                {
+                    break; 
+                }
+            }
+            
+            int realStartX = startX - backwardCount * dx;
+            int realStartY = startY - backwardCount * dy;
+            
+            
+            for (int i = 0; i < 10; i++)
+            {
+                int checkX = realStartX + i * dx;
+                int checkY = realStartY + i * dy;
+                var cell = GetCell(checkX, checkY);
+                
+                if (cell == player)
+                {
+                    double weight = _fieldGenerator.GetCellWeight(checkX, checkY);
+                    line.AddCell(checkX, checkY, weight);
+                }
+                else if (cell == opponent || cell == Player.None)
+                {
+                    break; 
+                }
+            }
+            
+            if (line.Cells.Count >= 2)
+            {
+                line.IsFullyBlocked = IsLineFullyBlocked(line, player);
+            }
+            
+            return line;
+        }
+        
+        public string GetAllPlayerLinesInfo()
+        {
+            var builder = new StringBuilder();
+            
+            builder.AppendLine("=== ВСЕ ЛИНИИ ИЗ 3+ КЛЕТОК ===");
+            builder.AppendLine();
+            
+            foreach (var player in new[] { Player.X, Player.O })
+            {
+                builder.AppendLine($"Игрок {player}:");
+                var allLines = GetAllPlayerLines(player, 3);
+                
+                if (allLines.Count == 0)
+                {
+                    builder.AppendLine("  Нет линий из 3+ клеток");
+                    builder.AppendLine();
+                    continue;
+                }
+                
+                allLines = allLines
+                    .OrderByDescending(l => l.Cells.Count)
+                    .ThenByDescending(l => l.TotalWeight)
+                    .ToList();
+                
+                for (int i = 0; i < allLines.Count; i++)
+                {
+                    var line = allLines[i];
+                    builder.AppendLine($"  Линия #{i + 1}:");
+                    builder.AppendLine($"    Клеток: {line.Cells.Count}");
+                    builder.AppendLine($"    Вес линии: {line.TotalWeight:F1}");
+                    builder.AppendLine($"    Заблокирована: {(line.IsFullyBlocked ? "ДА" : "НЕТ")}");
+                    
+                    var cellsStr = string.Join(" → ", line.Cells.Select(c => $"({c.x},{c.y})"));
+                    builder.AppendLine($"    Клетки: {cellsStr}");
+                    
+                    if (line.Cells.Count >= 2)
+                    {
+                        var first = line.Cells[0];
+                        var second = line.Cells[1];
+                        string direction = GetLineDirection(first, second);
+                        builder.AppendLine($"    Направление: {direction}");
+                    }
+                    
+                    builder.AppendLine();
+                }
+                
+                builder.AppendLine($"Всего линий: {allLines.Count}");
+                builder.AppendLine();
+            }
+            
+            builder.AppendLine("=== ЛУЧШИЕ ЛИНИИ (по системе подсчета очков) ===");
+            foreach (var player in new[] { Player.X, Player.O })
+            {
+                var bestLine = _bestPlayerLine[player];
+                builder.AppendLine($"Игрок {player}:");
+                if (bestLine != null)
+                {
+                    builder.AppendLine($"  Клеток: {bestLine.Cells.Count}/{bestLine.RequiredLength}");
+                    builder.AppendLine($"  Общий вес: {bestLine.TotalWeight:F1}");
+                    builder.AppendLine($"  Активна: {bestLine.IsActive}");
+                    builder.AppendLine($"  Заблокирована: {bestLine.IsFullyBlocked}");
+                    builder.AppendLine($"  Очки: {CalculatePlayerScore(player):F1}");
+                    
+                    var cellsStr = string.Join(" → ", bestLine.Cells.Select(c => $"({c.x},{c.y})"));
+                    builder.AppendLine($"  Клетки: {cellsStr}");
+                }
+                else
+                {
+                    builder.AppendLine("  Нет лучшей линии");
+                }
+                builder.AppendLine();
+            }
+            
+            return builder.ToString();
+        }
+        
+        private string GetLineDirection((int x, int y) first, (int x, int y) second)
+        {
+            int dx = second.x - first.x;
+            int dy = second.y - first.y;
+            
+            if (dx == 0) return "Вертикаль";
+            if (dy == 0) return "Горизонталь";
+            if (dx == dy) return "Диагональ ↘";
+            if (dx == -dy) return "Диагональ ↗";
+            
+            return "Разные направления";
         }
         
         public IEnumerable<(int x, int y, Player player)> GetGeneratedField(int radius = 3)
@@ -867,34 +1098,6 @@ namespace TicTacToeGame.Models
             return new TicTacToeBoard(this);
         }
         
-        // Старая проверка линии (оставлена для совместимости)
-        private bool CheckLine(int startX, int startY, int dx, int dy, Player player)
-        {
-            int count = 1;
-            
-            for (int i = 1; i < 5; i++)
-            {
-                int x = startX + i * dx;
-                int y = startY + i * dy;
-                if (GetCell(x, y) == player)
-                    count++;
-                else
-                    break;
-            }
-            
-            for (int i = 1; i < 5; i++)
-            {
-                int x = startX - i * dx;
-                int y = startY - i * dy;
-                if (GetCell(x, y) == player)
-                    count++;
-                else
-                    break;
-            }
-            
-            return count >= 5;
-        }
-        
         public string GetBoardStateString()
         {
             var builder = new StringBuilder();
@@ -909,11 +1112,39 @@ namespace TicTacToeGame.Models
         public bool Equals(TicTacToeBoard other)
         {
             if (other is null) return false;
-            return GetBoardStateString() == other.GetBoardStateString();
+            if (ReferenceEquals(this, other)) return true;
+            
+            if (CurrentPlayer != other.CurrentPlayer) return false;
+            if (MoveCount != other.MoveCount) return false;
+            
+            if (_board.Count != other._board.Count) return false;
+            
+            foreach (var kvp in _board)
+            {
+                if (!other._board.TryGetValue(kvp.Key, out var otherPlayer) || 
+                    otherPlayer != kvp.Value)
+                    return false;
+            }
+            
+            return true;
         }
         
         public override bool Equals(object obj) => Equals(obj as TicTacToeBoard);
-        public override int GetHashCode() => GetBoardStateString().GetHashCode();
+        
+        public override int GetHashCode()
+        {
+            var hash = new HashCode();
+            hash.Add(CurrentPlayer);
+            hash.Add(MoveCount);
+            
+            foreach (var kvp in _board.OrderBy(x => x.Key))
+            {
+                hash.Add(kvp.Key);
+                hash.Add(kvp.Value);
+            }
+            
+            return hash.ToHashCode();
+        }
         
         public string GetBoardVisualization(int radius = 3)
         {
@@ -945,7 +1176,6 @@ namespace TicTacToeGame.Models
             return builder.ToString();
         }
         
-        // Метод для получения визуализации с весами
         public string GetBoardVisualizationWithWeights(int radius = 3)
         {
             var builder = new StringBuilder();
@@ -980,17 +1210,9 @@ namespace TicTacToeGame.Models
                 builder.Append($"{x,4}");
             }
             
-            builder.AppendLine();
-            builder.AppendLine();
-            builder.AppendLine("Легенда:");
-            builder.AppendLine("  X - крестик");
-            builder.AppendLine("  O - нолик");
-            builder.AppendLine("  числа - стратегический вес клетки");
-            
             return builder.ToString();
         }
         
-        // Метод для получения визуализации с линиями
         public string GetBoardVisualizationWithLines(int radius = 3)
         {
             var builder = new StringBuilder();
@@ -998,52 +1220,135 @@ namespace TicTacToeGame.Models
             builder.AppendLine("Доска с линиями игроков:");
             builder.AppendLine();
             
-            // Очки игроков
             double xScore = CalculatePlayerScore(Player.X);
             double oScore = CalculatePlayerScore(Player.O);
             builder.AppendLine($"Очки: ✕ {xScore:F1} | ○ {oScore:F1}");
             builder.AppendLine();
             
-            // Линии игроков
-            builder.AppendLine("Линии крестиков (✕):");
-            var xLines = GetPlayerLines(Player.X).ToList();
-            if (xLines.Any())
+            builder.AppendLine("Лучшая линия крестиков (✕):");
+            var xLine = _bestPlayerLine[Player.X];
+            if (xLine != null)
             {
-                foreach (var line in xLines.OrderByDescending(l => l.CalculateScore()).Take(3))
-                {
-                    builder.AppendLine($"  - {line.Cells.Count}/{line.RequiredLength} клеток, вес: {line.TotalWeight:F1}, очки: {line.CalculateScore():F1}");
-                }
+                builder.AppendLine($"  Клеток: {xLine.Cells.Count}/{xLine.RequiredLength}");
+                builder.AppendLine($"  Сумма весов: {xLine.TotalWeight:F1}");
+                builder.AppendLine($"  Заблокирована: {(xLine.IsFullyBlocked ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Активна: {(xLine.IsActive ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Очки: {xLine.CalculateScore():F1}");
             }
             else
             {
-                builder.AppendLine("  Нет линий");
+                builder.AppendLine("  Нет линии");
             }
             
             builder.AppendLine();
-            builder.AppendLine("Линии ноликов (○):");
-            var oLines = GetPlayerLines(Player.O).ToList();
-            if (oLines.Any())
+            builder.AppendLine("Лучшая линия ноликов (○):");
+            var oLine = _bestPlayerLine[Player.O];
+            if (oLine != null)
             {
-                foreach (var line in oLines.OrderByDescending(l => l.CalculateScore()).Take(3))
-                {
-                    builder.AppendLine($"  - {line.Cells.Count}/{line.RequiredLength} клеток, вес: {line.TotalWeight:F1}, очки: {line.CalculateScore():F1}");
-                }
+                builder.AppendLine($"  Клеток: {oLine.Cells.Count}/{oLine.RequiredLength}");
+                builder.AppendLine($"  Сумма весов: {oLine.TotalWeight:F1}");
+                builder.AppendLine($"  Заблокирована: {(oLine.IsFullyBlocked ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Активна: {(oLine.IsActive ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Очки: {oLine.CalculateScore():F1}");
             }
             else
             {
-                builder.AppendLine("  Нет линий");
+                builder.AppendLine("  Нет линии");
             }
             
             return builder.ToString();
         }
         
-        // Проверяет, будет ли ход на границе заданного радиуса
+        public string GetBoardVisualizationWithNewRules(int radius = 3)
+        {
+            var builder = new StringBuilder();
+            
+            builder.AppendLine("НОВЫЕ ПРАВИЛА:");
+            builder.AppendLine($"• Очки ТОЛЬКО за одну лучшую линию");
+            builder.AppendLine($"• Клетки вне лучшей линии не дают очков");
+            builder.AppendLine($"• При блокировке линия обнуляется и больше не считается");
+            builder.AppendLine($"• Нужно строить новую линию");
+            builder.AppendLine();
+            
+            double xScore = CalculatePlayerScore(Player.X);
+            double oScore = CalculatePlayerScore(Player.O);
+            
+            var xBestLine = _bestPlayerLine[Player.X];
+            var oBestLine = _bestPlayerLine[Player.O];
+            
+            builder.AppendLine($"Очки по новым правилам:");
+            builder.AppendLine($"  ✕: {xScore:F1} | ○: {oScore:F1}");
+            builder.AppendLine();
+            
+            builder.AppendLine("Лучшая линия крестиков (✕):");
+            if (xBestLine != null)
+            {
+                builder.AppendLine($"  Клеток: {xBestLine.Cells.Count}/{xBestLine.RequiredLength}");
+                builder.AppendLine($"  Сумма весов: {xBestLine.TotalWeight:F1}");
+                builder.AppendLine($"  Заблокирована: {(xBestLine.IsFullyBlocked ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Активна: {(xBestLine.IsActive ? "ДА" : "НЕТ")}");
+                
+                if (!xBestLine.IsActive || xBestLine.IsFullyBlocked)
+                    builder.AppendLine($"  [СЧЕТ = 0]");
+            }
+            else
+            {
+                builder.AppendLine("  Нет линии [СЧЕТ = 0]");
+            }
+            
+            builder.AppendLine();
+            builder.AppendLine("Лучшая линия ноликов (○):");
+            if (oBestLine != null)
+            {
+                builder.AppendLine($"  Клеток: {oBestLine.Cells.Count}/{oBestLine.RequiredLength}");
+                builder.AppendLine($"  Сумма весов: {oBestLine.TotalWeight:F1}");
+                builder.AppendLine($"  Заблокирована: {(oBestLine.IsFullyBlocked ? "ДА" : "НЕТ")}");
+                builder.AppendLine($"  Активна: {(oBestLine.IsActive ? "ДА" : "НЕТ")}");
+                
+                if (!oBestLine.IsActive || oBestLine.IsFullyBlocked)
+                    builder.AppendLine($"  [СЧЕТ = 0]");
+            }
+            else
+            {
+                builder.AppendLine("  Нет линии [СЧЕТ = 0]");
+            }
+            
+            return builder.ToString();
+        }
+        
+        public string GetDebugInfo()
+        {
+            var builder = new StringBuilder();
+            
+            foreach (var player in new[] { Player.X, Player.O })
+            {
+                var line = _bestPlayerLine[player];
+                builder.AppendLine($"{player}:");
+                
+                if (line != null)
+                {
+                    builder.AppendLine($"  Cells: {string.Join(", ", line.Cells)}");
+                    builder.AppendLine($"  TotalWeight: {line.TotalWeight:F1}");
+                    builder.AppendLine($"  IsActive: {line.IsActive}");
+                    builder.AppendLine($"  IsFullyBlocked: {line.IsFullyBlocked}");
+                    builder.AppendLine($"  IsBlockedCheck: {IsLineFullyBlocked(line, player)}");
+                    builder.AppendLine($"  Score: {CalculatePlayerScore(player):F1}");
+                }
+                else
+                {
+                    builder.AppendLine($"  No line");
+                }
+                builder.AppendLine();
+            }
+            
+            return builder.ToString();
+        }
+        
         public bool WouldMoveBeOnBorder(int x, int y, int radius)
         {
             return _fieldGenerator.IsOnBorder(x, y, radius);
         }
 
-        // Получает все возможные ходы на границе заданного радиуса
         public IEnumerable<TicTacToeMove> GetBorderMoves(int radius)
         {
             var borderCells = _fieldGenerator.GetBorderCells(radius);
@@ -1054,7 +1359,6 @@ namespace TicTacToeGame.Models
                 .OrderByDescending(move => _fieldGenerator.GetCellWeight(move.X, move.Y));
         }
 
-        // Визуализация с выделением границ
         public string GetBoardVisualizationWithBorders(int radius = 3)
         {
             var builder = new StringBuilder();
@@ -1074,7 +1378,6 @@ namespace TicTacToeGame.Models
                         _ => _fieldGenerator.IsPositionOccupied(x, y) ? '*' : '.'
                     };
                     
-                    // Выделяем граничные клетки
                     if (_fieldGenerator.IsOnBorder(x, y, radius))
                     {
                         builder.Append($"[{symbol}]");
@@ -1096,7 +1399,6 @@ namespace TicTacToeGame.Models
             return builder.ToString();
         }
         
-        // Получение статистики по весам клеток
         public (double minWeight, double maxWeight, double avgWeight) GetWeightStatistics(int radius = 3)
         {
             double minWeight = double.MaxValue;
@@ -1120,13 +1422,11 @@ namespace TicTacToeGame.Models
             return (minWeight, maxWeight, avgWeight);
         }
         
-        // Сброс весов к значениям по умолчанию
         public void ResetWeights()
         {
             _fieldGenerator.ResetWeights();
         }
         
-        // Получение топ-N самых перспективных клеток
         public IEnumerable<(int x, int y, double weight)> GetTopStrategicCells(int count = 10, int radius = 3)
         {
             var positions = _fieldGenerator.GenerateFieldAround((0, 0), radius)
@@ -1138,34 +1438,127 @@ namespace TicTacToeGame.Models
             return positions;
         }
         
-        // Получить текущий размер поля
         public int GetFieldSize() => _gameRules.FieldSize;
         
-        // Получить требуемую длину линии
         public int GetRequiredLineLength() => _gameRules.RequiredLineLength;
         
-        // Изменить размер поля
-        // Изменить размер поля
         public void SetFieldSize(int size)
         {
-            // Устанавливаем новый размер поля
             _gameRules.FieldSize = size;
             
-            // Получаем новую требуемую длину линии
             int newRequiredLength = _gameRules.RequiredLineLength;
             
-            // Обновляем требуемую длину ВСЕХ существующих линий
-            foreach (var line in _playerLines[Player.X])
-            {
-                line.RequiredLength = newRequiredLength;
-            }
+            if (_bestPlayerLine[Player.X] != null)
+                _bestPlayerLine[Player.X].RequiredLength = newRequiredLength;
             
-            foreach (var line in _playerLines[Player.O])
-            {
-                line.RequiredLength = newRequiredLength;
-            }
+            if (_bestPlayerLine[Player.O] != null)
+                _bestPlayerLine[Player.O].RequiredLength = newRequiredLength;
+        }
+        
+        public (int x, int y, Player player) GetCenterCell()
+        {
+            return (0, 0, GetCell(0, 0));
+        }
+        
+        public IEnumerable<(int x, int y)> GetEmptyCellsInRadius(int radius = 3)
+        {
+            var positions = _fieldGenerator.GenerateFieldAround((0, 0), radius);
             
-
+            foreach (var (x, y) in positions)
+            {
+                if (GetCell(x, y) == Player.None)
+                {
+                    yield return (x, y);
+                }
+            }
+        }
+        
+        public IEnumerable<(int x, int y)> GetOccupiedCells()
+        {
+            return _board.Keys.Select(k => (k.Item1, k.Item2));
+        }
+        
+        public int GetPlayerCellCount(Player player)
+        {
+            return _board.Values.Count(v => v == player);
+        }
+        
+        public double GetAverageCellWeight()
+        {
+            var stats = GetWeightStatistics(5);
+            return stats.avgWeight;
+        }
+        
+        public string GetRulesSummary()
+        {
+            return $"Правила: Размер={GetFieldSize()}, " +
+                   $"Длина линии={GetRequiredLineLength()}, " +
+                   $"Только одна линия={_gameRules.UseSingleLineScoring}, " +
+                   $"Обнуление при блокировке={_gameRules.ResetScoreOnFullBlock}";
+        }
+        
+        public bool IsCellInBestLine(int x, int y, Player player)
+        {
+            var bestLine = _bestPlayerLine[player];
+            if (bestLine == null)
+                return false;
+                
+            return bestLine.Contains(x, y);
+        }
+        
+        public double GetLineCompletionPercentage(Player player)
+        {
+            var bestLine = _bestPlayerLine[player];
+            if (bestLine == null || bestLine.RequiredLength == 0)
+                return 0;
+                
+            return (double)bestLine.Cells.Count / bestLine.RequiredLength;
+        }
+        
+        public void ClearBoard()
+        {
+            _board.Clear();
+            _fieldGenerator.ResetWeights();
+            _fieldGenerator = new InfiniteFieldGenerator();
+            _bestPlayerLine[Player.X] = null;
+            _bestPlayerLine[Player.O] = null;
+            CurrentPlayer = Player.X;
+        }
+        
+        public bool IsLineBlocked(Player player)
+        {
+            var line = _bestPlayerLine[player];
+            if (line == null)
+                return false;
+                
+            return line.IsFullyBlocked;
+        }
+        
+        public bool HasActiveLine(Player player)
+        {
+            var line = _bestPlayerLine[player];
+            if (line == null)
+                return false;
+                
+            return line.IsActive && !line.IsFullyBlocked;
+        }
+        
+        public int GetBestLineLength(Player player)
+        {
+            var line = _bestPlayerLine[player];
+            if (line == null)
+                return 0;
+                
+            return line.Cells.Count;
+        }
+        
+        public IEnumerable<(int x, int y)> GetBestLineCells(Player player)
+        {
+            var line = _bestPlayerLine[player];
+            if (line == null)
+                return Enumerable.Empty<(int, int)>();
+                
+            return line.Cells;
         }
     }
 }

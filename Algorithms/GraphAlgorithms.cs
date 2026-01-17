@@ -64,7 +64,7 @@ namespace TicTacToeGame.Algorithms
             }
         }
 
-        // Проверка на связность (для неориентированного графа)
+        // Проверка на связность 
         public static bool IsConnected<T>(Graph<T> graph) where T : IComparable<T>
         {
             if (graph.VertexCount == 0)
@@ -101,14 +101,14 @@ namespace TicTacToeGame.Algorithms
         {
             var graph = new Graph<(int x, int y)>();
 
-            // Генерируем позиции из доски
+            
             var positions = board.GetGeneratedField(radius);
 
             foreach (var (x, y, _) in positions)
             {
                 graph.AddVertex((x, y));
 
-                // Добавляем ребра между соседними позициями
+                
                 (int, int)[] directions = { (1, 0), (0, 1), (1, 1), (1, -1) };
 
                 foreach (var (dx, dy) in directions)

@@ -1,9 +1,10 @@
-﻿namespace TicTacToeGameMauiApp;
-
-public partial class AppShell : Shell
+﻿namespace TicTacToeGame
 {
-    public AppShell()
+    public partial class AppShell : Shell
     {
-        InitializeComponent();
+        public AppShell()
+        {
+            InitializeComponent();
+        }
     }
 }

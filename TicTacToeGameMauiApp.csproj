@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     
-    <!-- Добавьте эти обязательные свойства -->
+    
     <ApplicationId>com.yourcompany.tictactoe</ApplicationId>
     <ApplicationVersion>1.0</ApplicationVersion>
     <ApplicationDisplayVersion>1.0.0</ApplicationDisplayVersion>

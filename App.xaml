@@ -4,9 +4,22 @@
              x:Class="TicTacToeGame.App">
     <Application.Resources>
         <ResourceDictionary>
-            <Color x:Key="Primary">#1E88E5</Color>
-            <Color x:Key="Secondary">#D32F2F</Color>
-            <Color x:Key="Background">#FAFAFA</Color>
+            <Color x:Key="Primary">#512BD4</Color>
+            <Color x:Key="Secondary">#DFD8F7</Color>
+            <Color x:Key="Tertiary">#2B0B98</Color>
+            <Color x:Key="White">#FFFFFF</Color>
+            
+            <Style TargetType="Label">
+                <Setter Property="TextColor" Value="Black" />
+            </Style>
+            
+            <Style TargetType="Button">
+                <Setter Property="BackgroundColor" Value="{StaticResource Primary}" />
+                <Setter Property="TextColor" Value="White" />
+                <Setter Property="FontSize" Value="14" />
+                <Setter Property="CornerRadius" Value="8" />
+                <Setter Property="Padding" Value="10,5" />
+            </Style>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

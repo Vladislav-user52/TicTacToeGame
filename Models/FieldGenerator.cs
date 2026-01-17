@@ -31,7 +31,7 @@ namespace TicTacToeGame.Models
 
         private void InitializeDefaultWeights()
         {
-            // Инициализируем веса для центральной области
+            
             for (int x = -10; x <= 10; x++)
             {
                 for (int y = -10; y <= 10; y++)
@@ -44,20 +44,20 @@ namespace TicTacToeGame.Models
 
         private double CalculateDefaultWeight(int x, int y)
         {
-            // Базовый вес на основе расстояния от центра
+            
             double distanceFromCenter = Math.Sqrt(x * x + y * y);
             
-            // Центральные клетки имеют больший вес
+            
             double baseWeight = Math.Max(10.0 / (1.0 + distanceFromCenter), 0.5);
             
-            // Дополнительный вес для центральных линий
+            
             if (x == 0 || y == 0 || Math.Abs(x) == Math.Abs(y))
                 baseWeight *= 1.2;
             
-            // Дополнительный вес для стратегических позиций (углы и центр)
-            if (x == 0 && y == 0) baseWeight *= 2.0; // Самый центр
-            else if (Math.Abs(x) == 1 && y == 0) baseWeight *= 1.5; // Горизонталь от центра
-            else if (x == 0 && Math.Abs(y) == 1) baseWeight *= 1.5; // Вертикаль от центра
+            
+            if (x == 0 && y == 0) baseWeight *= 2.0; 
+            else if (Math.Abs(x) == 1 && y == 0) baseWeight *= 1.5; 
+            else if (x == 0 && Math.Abs(y) == 1) baseWeight *= 1.5; 
             
             return Math.Round(baseWeight, 2);
         }
@@ -66,7 +66,7 @@ namespace TicTacToeGame.Models
         {
             if (_occupiedPositions.Count == 0)
             {
-                // Если нет занятых клеток, возвращаем область вокруг центра
+                
                 foreach (var pos in GenerateFieldAround((0, 0), 3))
                 {
                     yield return pos;
@@ -74,7 +74,7 @@ namespace TicTacToeGame.Models
                 yield break;
             }
 
-            // Рассчитываем область, охватывающую все занятые клетки
+            
             int minX = _bounds.minX - padding;
             int maxX = _bounds.maxX + padding;
             int minY = _bounds.minY - padding;
@@ -89,7 +89,7 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Генерация области фиксированного радиуса
+        
         public IEnumerable<(int x, int y)> GenerateFieldAround((int x, int y) center, int radius)
         {
             for (int dx = -radius; dx <= radius; dx++)
@@ -101,7 +101,7 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Генерация свободных позиций с автоматическим определением области поиска
+        
         public IEnumerable<(int x, int y)> GenerateFreePositions(int padding = 2)
         {
             var area = GenerateFieldAroundOccupied(padding);
@@ -115,7 +115,7 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Генерация позиций, смежных с занятыми
+        
         public IEnumerable<(int x, int y)> GenerateAdjacentPositions()
         {
             var adjacent = new HashSet<(int x, int y)>();
@@ -154,17 +154,17 @@ namespace TicTacToeGame.Models
             return adjacent;
         }
 
-        // Управление состоянием
+        
         public void MarkPositionOccupied(int x, int y)
         {
             _occupiedPositions.Add((x, y));
             UpdateBounds(x, y);
             _currentRadius = Math.Max(_currentRadius, Math.Max(Math.Abs(x), Math.Abs(y)));
             
-            // Уменьшаем вес занятой клетки
+            
             SetCellWeight(x, y, GetCellWeight(x, y) * 0.3);
             
-            // Увеличиваем вес соседних клеток
+            
             UpdateWeightsAroundPosition(x, y, 0.5);
         }
 
@@ -182,17 +182,17 @@ namespace TicTacToeGame.Models
                 _currentRadius = 0;
             }
             
-            // Восстанавливаем вес освобожденной клетки
+            
             double defaultWeight = CalculateDefaultWeight(x, y);
             SetCellWeight(x, y, defaultWeight);
         }
 
         public bool IsPositionOccupied(int x, int y) => _occupiedPositions.Contains((x, y));
 
-        // Методы для работы с весами
+        
         public void SetCellWeight(int x, int y, double weight)
         {
-            _cellWeights[(x, y)] = Math.Max(weight, 0.1); // Минимальный вес 0.1
+            _cellWeights[(x, y)] = Math.Max(weight, 0.1); 
         }
 
         public double GetCellWeight(int x, int y)
@@ -200,7 +200,7 @@ namespace TicTacToeGame.Models
             if (_cellWeights.TryGetValue((x, y), out double weight))
                 return weight;
             
-            // Если вес не задан, вычисляем его динамически
+            
             weight = CalculateDefaultWeight(x, y);
             _cellWeights[(x, y)] = weight;
             return weight;
@@ -229,13 +229,13 @@ namespace TicTacToeGame.Models
                     int nx = x + dx;
                     int ny = y + dy;
                     
-                    // Увеличиваем вес соседних клеток
+                    
                     IncreaseCellWeight(nx, ny, increment);
                 }
             }
         }
 
-        // Получить все клетки с их весами
+        
         public IEnumerable<WeightedCell> GetAllWeightedCells(int radius = 5)
         {
             var positions = GenerateFieldAround((0, 0), radius);
@@ -246,7 +246,7 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Получить топ N клеток по весу
+       
         public IEnumerable<WeightedCell> GetTopWeightedCells(int count, int radius = 5)
         {
             return GetAllWeightedCells(radius)
@@ -255,12 +255,12 @@ namespace TicTacToeGame.Models
                 .Take(count);
         }
 
-        // Обновить веса на основе сделанных ходов
+       
         public void UpdateWeightsBasedOnMoves(IEnumerable<(int x, int y)> moves, Player player)
         {
             foreach (var (x, y) in moves)
             {
-                // Увеличиваем вес клеток вокруг сделанного хода
+                
                 for (int dx = -2; dx <= 2; dx++)
                 {
                     for (int dy = -2; dy <= 2; dy++)
@@ -270,7 +270,7 @@ namespace TicTacToeGame.Models
                         int nx = x + dx;
                         int ny = y + dy;
                         
-                        // Увеличиваем вес, но меньше для дальних клеток
+                        
                         double distanceFactor = 1.0 / (1.0 + Math.Sqrt(dx * dx + dy * dy));
                         IncreaseCellWeight(nx, ny, 0.3 * distanceFactor);
                     }
@@ -278,14 +278,14 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Сбросить все веса к значениям по умолчанию
+        
         public void ResetWeights()
         {
             _cellWeights.Clear();
             InitializeDefaultWeights();
         }
 
-        // Получить статистику по весам
+       
         public (double min, double max, double average) GetWeightStats(int radius = 5)
         {
             var weights = GetAllWeightedCells(radius)
@@ -302,7 +302,7 @@ namespace TicTacToeGame.Models
             );
         }
 
-        // Получить веса в виде матрицы для отображения
+        
         public double[,] GetWeightMatrix(int radius = 3)
         {
             int size = radius * 2 + 1;
@@ -313,7 +313,7 @@ namespace TicTacToeGame.Models
                 for (int j = 0; j < size; j++)
                 {
                     int x = i - radius;
-                    int y = radius - j; // Инвертируем для отображения сверху вниз
+                    int y = radius - j; 
                     matrix[i, j] = GetCellWeight(x, y);
                 }
             }
@@ -321,13 +321,13 @@ namespace TicTacToeGame.Models
             return matrix;
         }
 
-        // Получить текущий радиус поля (макс расстояние от центра)
+        
         public int GetCurrentRadius() => _currentRadius;
 
-        // Получить границы занятой области
+        
         public (int minX, int maxX, int minY, int maxY) GetBounds() => _bounds;
 
-        // Получить центр масс занятых клеток (для центрирования)
+        
         public (int centerX, int centerY) GetCenterOfMass()
         {
             if (_occupiedPositions.Count == 0)
@@ -343,7 +343,7 @@ namespace TicTacToeGame.Models
             return (sumX / _occupiedPositions.Count, sumY / _occupiedPositions.Count);
         }
 
-        // Получить рекомендуемый радиус для отображения
+        
         public int GetRecommendedDisplayRadius(int padding = 3)
         {
             if (_occupiedPositions.Count == 0)
@@ -402,13 +402,13 @@ namespace TicTacToeGame.Models
             return maxDistance;
         }
 
-        // Проверяет, находится ли позиция на границе заданного радиуса
+        
         public bool IsOnBorder(int x, int y, int radius)
         {
             return Math.Abs(x) == radius || Math.Abs(y) == radius;
         }
 
-        // Получает все граничные клетки для заданного радиуса
+        
         public IEnumerable<(int x, int y)> GetBorderCells(int radius)
         {
             // Верхняя и нижняя границы
@@ -418,7 +418,7 @@ namespace TicTacToeGame.Models
                 yield return (x, -radius); // Низ
             }
             
-            // Левая и правая границы (исключаем углы, т.к. они уже учтены)
+            // Левая и правая границы 
             for (int y = -radius + 1; y < radius; y++)
             {
                 yield return (radius, y);   // Право
@@ -426,19 +426,19 @@ namespace TicTacToeGame.Models
             }
         }
 
-        // Проверяет, выходит ли ход за пределы заданного радиуса
+        
         public bool IsMoveOutsideRadius(int x, int y, int radius)
         {
             return Math.Abs(x) > radius || Math.Abs(y) > radius;
         }
 
-        // Рекомендуемый радиус для отображения на основе занятых клеток
+        
         public int GetRecommendedRadiusForOccupied(int padding = 1)
         {
             if (_occupiedPositions.Count == 0)
                 return 3;
 
-            // Находим максимальную координату по модулю
+            
             int maxCoord = 0;
             foreach (var (x, y) in _occupiedPositions)
             {
@@ -448,7 +448,7 @@ namespace TicTacToeGame.Models
             return maxCoord + padding;
         }
 
-        // Метод для дебаггинга - получить строковое представление весов
+        
         public string GetWeightsString(int radius = 3)
         {
             var builder = new System.Text.StringBuilder();
